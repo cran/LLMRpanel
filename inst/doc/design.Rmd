@@ -1,0 +1,244 @@
+---
+title: "Survey and experiment pilots with LLMRpanel"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Survey and experiment pilots with LLMRpanel}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+# Every chunk below runs offline through a deterministic runner, so the
+# vignette executes during package builds without credentials or charges.
+# One chunk near the end is gated by RUN_LIVE for a genuinely live call.
+RUN_LIVE <- FALSE
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+LLMRpanel administers survey and experimental instruments to panels of
+language model personas. Use it to pretest questions, pilot conjoint
+designs, calculate sample sizes from pilot dispersion, or measure responses
+from a configured model. `panel_benchmark()` compares closed-item response
+shares with benchmark shares supplied by the user. It records deviations by
+item and response, nonresponse, and the number of closed items covered.
+
+Every example below executes offline through the `.runner` seam: a
+deterministic function stands in for the model, so the workflow runs during
+package builds without credentials or charges. One chunk near the end,
+gated by `RUN_LIVE`, shows the same call against a live provider.
+
+## What silicon panels are for
+
+1. **Instrument pretesting.** Administer draft items and inspect unmatched
+replies and first-option sensitivity.
+
+2. **Design piloting.** Run conjoint tasks and estimate response
+dispersion before planning human data collection.
+
+3. **Model measurement.** Compare response distributions across personas,
+item orders, option orders, or model configurations.
+
+## Panels and instruments
+
+```{r setup}
+library(LLMRpanel)
+
+# A deterministic stand-in for the model: it always picks the first
+# DISPLAYED option of a closed item (so option-order randomization shows up
+# in the shares) and answers open items with a fixed sentence.
+first_shown <- function(experiments, ...) {
+  experiments$response_text <- vapply(seq_len(nrow(experiments)), function(i) {
+    shown <- experiments$option_order[i]
+    if (is.na(shown)) "Because it reaches the most people."
+    else strsplit(shown, "|", fixed = TRUE)[[1]][1]
+  }, character(1))
+  experiments$success <- TRUE
+  experiments
+}
+```
+
+`panel_from_margins()` samples attribute values from the supplied marginal
+distributions. `set.seed()` makes this draw reproducible.
+
+```{r panel, purl=FALSE}
+set.seed(110)
+panel = panel_from_margins(
+  list(
+    age = c("18 to 34" = .30, "35 to 64" = .45, "65 plus" = .25),
+    party = c(left = .45, right = .45, independent = .10)
+  ),
+  n = 12,
+  persona_template = "A {age} year old voter who leans {party}."
+)
+panel
+
+instrument = panel_instrument(list(
+  item_likert("wk4", "A four day work week would benefit society."),
+  item_choice(
+    "fund",
+    "Which should the city fund first?",
+    c("public transit", "road repair")
+  ),
+  item_open("why", "In one sentence, why?")
+))
+instrument
+```
+
+Margins are useful when targets are published as tables. When microdata is
+available, `panel_from_data()` is the joint distribution counterpart. It
+draws personas from observed rows and therefore preserves relationships
+among attributes rather than sampling each margin independently.
+`LLMR::report()` identifies whether a panel came from supplied margins,
+microdata rows, or supplied personas.
+
+`panel_administer()` sends each item to each persona as an independent
+request. It returns a `panel_responses` object with response rows in `$data`
+and the panel, instrument, benchmark record, and token usage in separate
+components. It randomizes option order per response (a Likert scale is shown
+reversed for a random half) and records `item_position` (the item's fixed
+position in the instrument) and `option_order` (what this respondent saw) in
+`$data`. When comparing models, reset the seed before each administration so
+both models face the same option-order assignments.
+
+```{r administer, purl=FALSE}
+cfg = LLMR::llm_config("groq", "openai/gpt-oss-20b", temperature = 0.8)
+cfg_qwen = LLMR::llm_config("groq", "qwen/qwen3-32b", temperature = 0.8)
+
+set.seed(110)
+resp = panel_administer(panel, instrument, cfg, .runner = first_shown)
+resp
+resp$data
+panel_bias_audit(resp)
+LLMR::diagnostics(resp)
+
+set.seed(110)   # the same assignments for the second model
+resp_qwen = panel_administer(panel, instrument, cfg_qwen,
+                             .runner = first_shown)
+panel_bias_audit(resp_qwen)
+```
+
+## Compare responses with a benchmark
+
+`panel_benchmark()` compares valid model response shares with benchmark
+shares for matching item-response pairs. It also records benchmark coverage
+and item-level nonresponse in `$benchmark`. Before a benchmark is attached,
+response shares describe the configured model under the supplied personas,
+not a human population. `bench_fund` supplies shares for one closed item.
+
+```{r benchmark_partial, purl=FALSE}
+bench_fund = data.frame(
+  item_id = rep("fund", 2),
+  response = c("public transit", "road repair"),
+  share = c(0.41, 0.59)
+)
+
+resp_partial = panel_benchmark(
+  resp,
+  bench_fund,
+  benchmark_name = "toy city survey"
+)
+resp_partial
+```
+
+`bench_fund` covers one of the instrument's two closed items. `bench_all`
+adds shares for `wk4` and covers both.
+
+```{r benchmark_full, purl=FALSE}
+bench_all = rbind(
+  bench_fund,
+  data.frame(
+    item_id = rep("wk4", 5),
+    response = c(
+      "strongly disagree",
+      "disagree",
+      "neutral",
+      "agree",
+      "strongly agree"
+    ),
+    share = c(.05, .20, .25, .35, .15)
+  )
+)
+
+resp = panel_benchmark(
+  resp,
+  bench_all,
+  benchmark_name = "toy city survey"
+)
+resp
+LLMR::report(resp)
+resp$benchmark$nonresponse
+```
+
+`resp$benchmark$nonresponse` gives the missing response proportion for each
+closed item. The comparison shares use nonmissing responses as their
+denominator.
+
+## Conjoint designs
+
+`conjoint_design()` uses R's random-number generator to construct a classed
+design list. Its `$profiles` field contains the initial profile table, and its
+`$attributes` field contains the attribute universe. `panel_administer()` draws
+the profiles each respondent sees. Set a seed before administration to
+reproduce those respondent-level draws.
+
+```{r conjoint_design, purl=FALSE}
+set.seed(110)
+design = conjoint_design(
+  list(
+    price = c("low", "high"),
+    origin = c("domestic", "imported")
+  ),
+  n_tasks = 4
+)
+design
+design$profiles
+design$attributes
+```
+
+`conjoint_design()` attempts to use distinct profiles within each task in
+`$profiles` and warns when the attribute space cannot supply them.
+`conjoint_instrument()` creates one forced-choice item per task. Administration
+renders a fresh draw for each respondent and records it with the response.
+`conjoint_amce()` estimates from those recorded profiles relative to the first
+level of each attribute and calculates standard errors clustered by persona.
+
+```{r conjoint_amce, purl=FALSE}
+cj_instr = conjoint_instrument(design, "Which product would you buy?")
+set.seed(110)
+cj = panel_administer(panel, cj_instr, cfg, .runner = first_shown)
+conjoint_amce(cj)
+```
+
+`conjoint_amce()` returns a classed result with one row for each observed
+attribute level. Baseline levels have estimate 0 and missing standard errors.
+Other rows contain the estimated contrast and 95 percent interval. Run counts
+remain in separate columns.
+
+## A live administration
+
+The identical call against a live provider drops the `.runner` argument.
+This chunk runs only when `RUN_LIVE` is set to `TRUE` in the setup chunk.
+
+```{r live, eval = RUN_LIVE, purl=FALSE}
+resp_live = panel_administer(panel, instrument, cfg)
+resp_live
+```
+
+## Request counts and model choice
+
+`panel_administer()` makes one request per persona-item pair. Option
+randomization does not add requests. Provider prices and prompt and response
+lengths determine cost. A versioned local model can support later reruns when
+hosted endpoints change. The `$data` field retains `response_text`,
+`response_id`, `success`, `model`, and `provider`, including when a reply cannot
+be matched to a closed-item option. `finish_reason` is retained when the runner
+supplies it.
+
+## Relations
+
+[LLMR](https://asanaei.github.io/LLMR/) supplies provider configuration and
+execution. [LLMRcontent](https://asanaei.github.io/LLMRcontent/) provides
+codebook-based text annotation and validation.
+[LLMRagent](https://asanaei.github.io/LLMRagent/) provides agent experiments.
+[LLMRpanel](https://asanaei.github.io/LLMRpanel/) contains panel constructors,
+instruments, administration, and response summaries.
