@@ -1,51 +1,58 @@
 # benchmark.R --------------------------------------------------------------------
-# Benchmark comparisons, response diagnostics, and design calculations.
+# Benchmark comparisons, response diagnostics, and conjoint estimation.
 
-#' Compare silicon responses with a human benchmark
+#' Compare panel responses with a human benchmark
 #'
-#' Compares closed-item response shares with human benchmark shares supplied
-#' by the user. The result contains deviations for covered item-response
-#' pairs, the number of closed items covered, and nonresponse rates by item.
-#' The function does not alter responses or adjust response shares.
-#' Without a benchmark, response shares describe the configured model under the
-#' supplied personas, not a human population.
+#' Compares closed-item response shares with human benchmark shares.
+#' The comparison uses responses that parsed and were not reported as
+#' execution failures. It does not alter responses or adjust their shares.
+#'
+#' Without a benchmark, response shares describe the configured model
+#' under the supplied personas.
 #'
 #' @param responses A [panel_administer()] result.
-#' @param benchmark A data frame with columns `item_id`, `response`, and
-#'   `share` (human marginal proportions). Shares within an item should sum
-#'   to 1; a deviation beyond rounding draws a warning.
-#' @param benchmark_name How the source should be cited in reports (e.g.
-#'   `"ANES 2024 pilot"`).
-#' @return `responses` with its `benchmark` field set:
-#'   `$table` (per covered item and response: `share_silicon`,
-#'   `share_human`, `deviation`), `$nonresponse` (nonresponse and execution
-#'   failure rates per item),
-#'   `$items_covered` / `$items_total`, `$mean_abs_dev`, `$max_dev`.
-#' @examples
-#' set.seed(110)
-#' panel <- panel_from_margins(list(party = c(left = .5, right = .5)), n = 12,
-#'                             persona_template = "A voter who leans {party}.")
-#' instrument <- panel_instrument(item_choice("plan", "Which plan do you prefer?",
-#'                                            c("A", "B")))
-#' cfg <- LLMR::llm_config("groq", "openai/gpt-oss-20b")
+#' @param benchmark A data frame with `item_id`, `response`, and `share`
+#'   columns. Shares must be numeric probabilities in `[0, 1]` without
+#'   missing values. The function raises an error when an item's share
+#'   total differs from 1 by more than 0.01. Each item-response pair must
+#'   occur once, and covered response labels must be offered options. An
+#'   offered option that the benchmark omits for a covered item is taken as
+#'   a known human share of zero, not as a missing value.
+#' @param benchmark_name Name used to identify the benchmark in reports.
+#' @return `responses` with its `benchmark` field populated.
 #'
-#' by_party <- function(experiments, ...) {
-#'   experiments$response_text <- ifelse(
-#'     grepl("leans left", vapply(experiments$messages, `[[`, "", "system")),
-#'     "A", "B")
+#'   - `table` contains the panel share, human share, and their difference
+#'     for each covered item-response pair.
+#'   - `nonresponse` contains execution-failure and nonresponse rates
+#'     by item.
+#'   - `items_covered` and `items_total` record closed-item coverage.
+#'   - `mean_abs_dev` and `max_dev` summarize absolute deviations.
+#'   - `benchmark_name` and `ts` identify the comparison and its time.
+#' @details
+#' The function refuses conjoint responses because profile assignments
+#' differ across personas. It also refuses a covered item when every
+#' execution failed. If executions occurred but no response parsed for
+#' an item, its panel shares and deviations are `NA`.
+#' @examples
+#' panel <- panel_from_margins(list(group = c(A = 1)), n = 4)
+#' instrument <- panel_instrument(
+#'   item_choice("fund", "Choose an investment.", c("transit", "roads")),
+#'   randomize = character(0)
+#' )
+#' cfg <- LLMR::llm_config("groq", "example-model")
+#' runner <- function(experiments, ...) {
+#'   experiments$response_text <- "transit"
 #'   experiments
 #' }
-#' r <- panel_administer(panel, instrument, cfg, .runner = by_party)
-#' bench <- data.frame(item_id = "plan", response = c("A", "B"),
-#'                     share = c(.5, .5))
-#' panel_benchmark(r, bench, "toy human study")
-#'
-#' \donttest{
-#' if (nzchar(Sys.getenv("GROQ_API_KEY"))) {
-#'   live <- panel_administer(panel, instrument, cfg)
-#'   panel_benchmark(live, bench, "toy human study")
-#' }
-#' }
+#' responses <- panel_administer(
+#'   panel, instrument, cfg, .runner = runner
+#' )
+#' benchmark <- data.frame(
+#'   item_id = "fund",
+#'   response = c("transit", "roads"),
+#'   share = c(.6, .4)
+#' )
+#' panel_benchmark(responses, benchmark, "Example human benchmark")
 #' @export
 panel_benchmark <- function(responses, benchmark, benchmark_name = "benchmark") {
   stopifnot(inherits(responses, "panel_responses"), is.data.frame(benchmark))
@@ -329,8 +336,13 @@ plot.panel_responses <- function(x, ...) {
 #'
 #' @param responses A [panel_administer()] result.
 #' @return A tibble: `item_id`, `n`, `parse_failures`, `execution_failures`,
-#'   `order_effect_p` (the first-option chi-squared p-value; NA when order was
-#'   not randomized or cells are too sparse).
+#'   `order_effect_p`, and `order_test_note`. `order_effect_p` is the
+#'   first-option chi-squared p-value. When it is `NA`, `order_test_note` says
+#'   why: the item is open, its option order did not vary, fewer than four
+#'   responses parsed, every parsed response is the same, one option was shown
+#'   first in every parsed response, the expected cell counts are below five,
+#'   or the test itself failed, in which case a warning is also issued.
+#'   `order_test_note` is `NA` when a p-value is reported.
 #' @examples
 #' panel <- panel_from_margins(list(group = c(A = 1)), n = 4)
 #' instrument <- panel_instrument(
@@ -355,21 +367,36 @@ panel_bias_audit <- function(responses) {
     pf <- if (closed) sum(is.na(ri$response) & !failed) else 0L
     p <- NA_real_
     order_note <- NA_character_
-    if (closed && length(unique(stats::na.omit(ri$option_order))) > 1L) {
+    if (!closed) {
+      order_note <- "open item; no options to order"
+    } else if (length(unique(stats::na.omit(ri$option_order))) < 2L) {
+      order_note <- "option order did not vary"
+    } else {
       first_seen <- vapply(strsplit(ri$option_order, "|", fixed = TRUE),
                            `[[`, "", 1L)
       ok <- !is.na(ri$response)
-      if (sum(ok) >= 4L && length(unique(ri$response[ok])) > 1L) {
+      if (sum(ok) < 4L) {
+        order_note <- sprintf(
+          "%d parsed response(s); the test needs at least 4", sum(ok))
+      } else if (length(unique(ri$response[ok])) < 2L) {
+        order_note <- "every parsed response is the same"
+      } else {
         tab <- table(ri$response[ok], first_seen[ok])
-        if (all(dim(tab) >= 2L)) {
+        if (any(dim(tab) < 2L)) {
+          order_note <- "one option was shown first in every parsed response"
+        } else {
           test <- tryCatch(suppressWarnings(stats::chisq.test(tab)),
-                           error = function(e) NULL)
-          if (!is.null(test)) {
-            if (any(test$expected < 5)) {
-              order_note <- "sparse cells; chi-square approximation unreliable"
-            } else {
-              p <- test$p.value
-            }
+                           error = function(e) e)
+          if (inherits(test, "error")) {
+            order_note <- paste("chi-squared test failed:",
+                                conditionMessage(test))
+            rlang::warn(sprintf(
+              "The first-option test for item \"%s\" did not run: %s",
+              ri$item_id[1], conditionMessage(test)))
+          } else if (any(test$expected < 5)) {
+            order_note <- "sparse cells; chi-square approximation unreliable"
+          } else {
+            p <- test$p.value
           }
         }
       }
@@ -420,15 +447,26 @@ diagnostics.panel_responses <- function(x, ...) {
 #' AMCE estimator. The regression uses the respondent-level profiles recorded
 #' during administration, not the profiles in the initial design table.
 #'
+#' Each attribute's effects are relative to its reference level: the first
+#' level, in the design's order, that appears in the estimation data. That is
+#' the first declared level unless every profile showing it was lost, for
+#' example because the executions that drew it failed or their replies did not
+#' parse. A warning names the attribute and the level that took its place when
+#' this happens, and also names any other declared level that is absent and so
+#' has no row in the table.
+#'
 #' @param responses A [panel_administer()] result whose instrument came from
 #'   [conjoint_instrument()].
 #' @return A `conjoint_amce` tibble: `attribute`, `level`, `estimate`, `std_error`,
-#'   `ci_lo`, `ci_hi`. Baseline levels (the first level present, in the
-#'   design's order) appear with estimate 0 and `std_error = NA`, so the
-#'   table feeds the familiar conjoint plot directly. The ordinary columns
-#'   `n_profiles`, `n_respondents`, `n_dropped_na`, and
+#'   `ci_lo`, `ci_hi`. Reference levels appear with estimate 0 and
+#'   `std_error = NA`, so the table feeds the familiar conjoint plot directly.
+#'   The ordinary columns `n_profiles`, `n_respondents`, `n_dropped_na`, and
 #'   `n_execution_failures` record the profile rows used, the respondents
-#'   administered, missing task responses dropped, and failed executions.
+#'   administered (including those whose responses failed), missing task
+#'   responses dropped, and failed executions. The attribute `reference` is a
+#'   character vector naming each attribute's reference level, and
+#'   `n_clusters` is the number of personas with at least one estimated
+#'   response, the clusters behind the standard errors.
 #' @examples
 #' set.seed(110)
 #' panel <- panel_from_margins(list(group = c(A = .5, B = .5)), n = 6)
@@ -517,6 +555,36 @@ conjoint_amce <- function(responses) {
     lev <- as.character(attrs[[a]])
     lev[lev %in% as.character(unique(long[[a]]))]
   }), attr_names)
+  reference <- vapply(level_list, function(lev) {
+    if (length(lev)) lev[[1]] else NA_character_
+  }, character(1))
+  absence <- character(0)
+  for (a in attr_names) {
+    declared <- as.character(attrs[[a]])
+    missing_levels <- setdiff(declared, level_list[[a]])
+    if (declared[[1]] %in% missing_levels) {
+      absence <- c(absence, if (is.na(reference[[a]])) {
+        sprintf("`%s`: no declared level is present, so it has no estimate.", a)
+      } else {
+        sprintf(
+          "`%s`: the first declared level \"%s\" is absent, so effects are relative to \"%s\".",
+          a, declared[[1]], reference[[a]])
+      })
+      missing_levels <- missing_levels[-1]
+    }
+    if (length(missing_levels)) {
+      absence <- c(absence, sprintf(
+        "`%s`: %s %s absent and %s no estimate.", a,
+        paste(sprintf("\"%s\"", missing_levels), collapse = ", "),
+        if (length(missing_levels) == 1L) "is" else "are",
+        if (length(missing_levels) == 1L) "has" else "have"))
+    }
+  }
+  if (length(absence)) {
+    rlang::warn(c(
+      "Some declared conjoint levels are absent from the estimation data.",
+      stats::setNames(absence, rep("*", length(absence)))))
+  }
 
   x_cols <- list("(Intercept)" = rep(1, nrow(long)))
   term_index <- list()
@@ -572,17 +640,27 @@ conjoint_amce <- function(responses) {
   out$n_respondents <- as.integer(length(unique(r_all$persona_id)))
   out$n_dropped_na <- as.integer(n_dropped_na)
   out$n_execution_failures <- as.integer(n_execution_failures)
+  attr(out, "reference") <- reference
+  attr(out, "n_clusters") <- as.integer(G)
   class(out) <- c("conjoint_amce", class(out))
   out
 }
 
 #' @export
 print.conjoint_amce <- function(x, ...) {
+  clusters <- attr(x, "n_clusters")
   cat(sprintf(paste0(
-    "<conjoint_amce | %d profile row(s) | %d respondent(s) | ",
+    "<conjoint_amce | %d profile row(s) | %d respondent(s)%s | ",
     "%d missing, %d execution failure(s)>\n"),
-    x$n_profiles[1], x$n_respondents[1], x$n_dropped_na[1],
-    x$n_execution_failures[1]))
+    x$n_profiles[1], x$n_respondents[1],
+    if (is.null(clusters)) "" else sprintf(", %d estimation cluster(s)", clusters),
+    x$n_dropped_na[1], x$n_execution_failures[1]))
+  reference <- attr(x, "reference")
+  if (!is.null(reference)) {
+    cat(sprintf("Reference levels: %s\n",
+                paste(sprintf("%s = %s", names(reference), reference),
+                      collapse = "; ")))
+  }
   estimates <- x
   class(estimates) <- setdiff(class(estimates), "conjoint_amce")
   print(estimates[, c("attribute", "level", "estimate", "std_error",
@@ -636,7 +714,9 @@ panel_report <- function(responses, ...) {
     "FIRST-OPTION SENSITIVITY (chi-squared p by item; small p = which option was listed first moved the answers):",
     sprintf("  %-12s n = %3d  execution failures = %2d  parse failures = %2d  order p = %s",
             ba$item_id, ba$n, ba$execution_failures, ba$parse_failures,
-            ifelse(is.na(ba$order_effect_p), "n/a",
+            ifelse(is.na(ba$order_effect_p),
+                   ifelse(is.na(ba$order_test_note), "n/a",
+                          paste0("n/a (", ba$order_test_note, ")")),
                    format(round(ba$order_effect_p, 4))))
   )
   structure(lines, class = "panel_report")

@@ -39,9 +39,9 @@ key from an environment variable such as `GROQ_API_KEY`. Set it once in your
 
 ## A complete panel study
 
-The workflow constructs a panel, defines an instrument, records randomized
-assignments, compares closed items with human data, and uses the response
-dispersion for study planning.
+The workflow builds a persona panel and an instrument. Administration records
+the displayed option order, and benchmark comparisons use supplied human
+response shares.
 
 ### Build a persona panel
 
@@ -89,12 +89,17 @@ microdata_panel <- panel_from_data(
   weights = "survey_weight"
 )
 
-anes_panel <- panel_from_personas(LLMR::anes_2024_personas, n = 60)
+anes_panel <- panel_from_personas(anes_2024_personas, n = 60)
 ```
 
 `panel_from_personas()` uses prepared persona rows, including the question
-wording and demographic metadata in `LLMR::anes_2024_personas`. Reports identify
-whether a panel came from margins, microdata rows, or prepared personas.
+wording and demographic metadata of the bundled `anes_2024_personas`, 100
+respondents to the ANES 2024 Time Series Study chosen for diversity, without
+survey weights, so they stand for no population. Labeled survey columns are
+decoded from their value labels, missing-data labels such as "-9. Refused" are
+left out with a message, and identifier and weight columns are never rendered.
+Reports identify whether a panel came from margins, microdata rows, or prepared
+personas.
 
 ### Define an instrument
 
@@ -113,17 +118,25 @@ instrument <- panel_instrument(list(
   ),
   item_open(
     "reason",
-    "What is the main reason for your answer?"
+    "What should the city consider when choosing between public transit and road repair?"
   )
 ))
 ```
 
-### Administer with respondent randomization
+### Administer the instrument
 
-`panel_administer()` sends each item to each persona. By default,
-`panel_instrument()` randomizes item order and closed item option order for each
-respondent. The response data record `item_position` and `option_order`, so the
-realized assignments remain available for analysis.
+`panel_administer()` sends a separate request for each persona-item pair.
+A request contains the persona and one item. It does not contain earlier items
+or their responses.
+
+With the default instrument settings, choice options are permuted for each
+request. A Likert scale is displayed in its original or reversed order, each
+with probability one-half. Set `randomize = character(0)` in
+`panel_instrument()` to retain the supplied option order.
+
+The response data record the displayed options in `option_order`.
+`item_position` is the item's fixed, 1-based position in the instrument.
+It does not record an order of exposure.
 
 ```r
 resp <- panel_administer(panel, instrument, cfg)
@@ -195,9 +208,6 @@ cj_resp <- panel_administer(panel, cj_instrument, cfg)
 conjoint_amce(cj_resp)
 ```
 
-### Plan a human study from pilot dispersion
-
-
 ## Graphical interface
 
 `run_panel_studio()` provides a Shiny interface for panel construction,
@@ -246,7 +256,7 @@ tibble::as_tibble(batch_resp)
 
 `FocusGroup::create_agents_from_data()` accepts a `silicon_panel`, so panel
 personas can define participants in a moderated group discussion.
-`LLMR::anes_2024_personas` supplies prepared persona data used by both packages.
+LLMRpanel and FocusGroup ship identical copies of `anes_2024_personas`.
 
 ## Related packages
 

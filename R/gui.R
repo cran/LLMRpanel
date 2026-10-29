@@ -1,9 +1,6 @@
 # gui.R -------------------------------------------------------------------------
-# An optional Shiny GUI for LLMRpanel, launched with run_panel_studio(). Shiny,
-# bslib, DT, and the shared LLMR.shiny substrate are Suggests, not Imports: a
-# non-GUI user installs none of them, and R CMD check does not require them. Every
-# call into those packages is fully qualified and the launcher guards on all four,
-# so the analysis package stays lean and the app ships in the same box.
+# The optional Studio uses shiny, bslib, DT, and LLMR.shiny from Suggests.
+# Dependencies are checked when run_panel_studio() is called.
 
 #' Launch the LLMRpanel Shiny GUI
 #'
@@ -432,7 +429,19 @@ run_panel_studio <- function(...) {
     run_is_demo <- shiny::reactiveVal(NULL)
     run_error <- shiny::reactiveVal(NULL)
     analysis_error <- shiny::reactiveVal(NULL)
-    persona_source <- LLMR::anes_2024_personas
+    persona_source <- LLMRpanel::anes_2024_personas
+    # The fields offered for rendering; `ideology_score` is never rendered.
+    persona_fields <- setdiff(names(persona_source), "ideology_score")
+    # The frame a panel is built from, restricted to the chosen fields. The
+    # build and the persona preview both use it, so the preview shows the
+    # text that is sent.
+    persona_frame_for <- function(columns) {
+      if (is.null(columns) || setequal(columns, persona_fields)) {
+        persona_source
+      } else {
+        .restrict_persona_frame(persona_source, columns)
+      }
+    }
 
     output$module_ui <- shiny::renderUI({
       bslib::card(
@@ -461,7 +470,12 @@ run_panel_studio <- function(...) {
                   shiny::tagList(
                     "Population margins ",
                     LLMR.shiny::help_tip(
-                      "Enter one attribute per line as name: level=probability, level=probability."
+                      paste(
+                        "Enter one attribute per line as name: level=weight, level=weight.",
+                        "Use decimal points. Weights must be finite and nonnegative,",
+                        "with a positive total for each attribute.",
+                        "Weights are normalized when the panel is drawn."
+                      )
                     )
                   ),
                   rows = 4,
@@ -539,13 +553,13 @@ run_panel_studio <- function(...) {
                             "Clear a field to omit it from the persona text sent with each request."
                           )
                         ),
-                        choices = names(persona_source),
-                        # Demographic fields only by default: selecting all 125
+                        choices = persona_fields,
+                        # Demographic fields only by default: selecting all 122
                         # fields would push every prior attitude item into the
                         # prompt (target leakage) and multiply its length.
                         selected = intersect(
                           LLMR::llm_persona_demographic_fields(persona_source),
-                          names(persona_source)
+                          persona_fields
                         )
                       )
                     ),
@@ -553,7 +567,7 @@ run_panel_studio <- function(...) {
                       condition = sprintf(
                         "input['%s'] == 'selected'", ns("anes_mode")
                       ),
-                      shiny::tags$h6("Full selected persona"),
+                      shiny::tags$h6("Selected persona as sent"),
                       LLMR.shiny::text_block_output(
                         ns("persona_text"), height = "12rem"
                       )
@@ -658,6 +672,13 @@ run_panel_studio <- function(...) {
             bslib::accordion_panel(
               "3. Set administration",
               value = "administration",
+              shiny::tags$p(
+                class = "text-muted",
+                paste(
+                  "Each persona-item pair is sent as a separate request.",
+                  "Earlier items and responses are not included."
+                )
+              ),
               shiny::numericInput(
                 ns("runs"),
                 shiny::tagList(
@@ -696,7 +717,11 @@ run_panel_studio <- function(...) {
                   shiny::tagList(
                     "Benchmark shares ",
                     LLMR.shiny::help_tip(
-                      "Enter the human response distribution as level=share pairs separated by commas."
+                      paste(
+                        "Enter level=share pairs separated by commas. Use decimal points.",
+                        "Shares must be probabilities and must sum to 1 within",
+                        "the allowed rounding tolerance."
+                      )
                     )
                   ),
                   value = "yes=0.5, no=0.4, unsure=0.1"
@@ -730,19 +755,107 @@ run_panel_studio <- function(...) {
     output$run_error <- shiny::renderUI(run_error())
     output$analysis_error <- shiny::renderUI(analysis_error())
 
+    parse_error <- function(message) list(value = NULL, error = message)
+    parse_share_tokens <- function(txt, margin = NULL) {
+      # Delimiter positions retain empty fields, including a trailing field.
+      commas <- gregexpr(",", txt, fixed = TRUE)[[1]]
+      commas <- commas[commas > 0L]
+      tokens <- trimws(substring(
+        txt, c(1L, commas + 1L), c(commas - 1L, nchar(txt))
+      ))
+      values <- numeric(length(tokens))
+      levels <- character(length(tokens))
+      for (i in seq_along(tokens)) {
+        token <- tokens[[i]]
+        if (!nzchar(token)) {
+          message <- if (is.null(margin)) {
+            sprintf("Benchmark shares have an empty token at position %d.", i)
+          } else {
+            sprintf("Margin '%s' has an empty token at position %d.", margin, i)
+          }
+          return(parse_error(message))
+        }
+        equals <- regexpr("=", token, fixed = TRUE)[[1]]
+        if (equals < 0L) {
+          message <- if (is.null(margin)) {
+            sprintf("Benchmark token '%s' needs '='.", token)
+          } else {
+            sprintf("Margin '%s' has token '%s' without '='.", margin, token)
+          }
+          return(parse_error(paste(
+            message,
+            "Use level=share pairs and a decimal point for fractional shares."
+          )))
+        }
+        level <- trimws(substr(token, 1L, equals - 1L))
+        if (!nzchar(level)) {
+          message <- if (is.null(margin)) {
+            sprintf("Benchmark token '%s' has an empty level.", token)
+          } else {
+            sprintf("Margin '%s' has an empty level in token '%s'.", margin, token)
+          }
+          return(parse_error(message))
+        }
+        if (level %in% levels[seq_len(i - 1L)]) {
+          message <- if (is.null(margin)) {
+            sprintf("Benchmark level '%s' is repeated in token '%s'.", level, token)
+          } else {
+            sprintf("Margin '%s' repeats level '%s' in token '%s'.", margin, level, token)
+          }
+          return(parse_error(message))
+        }
+        value <- suppressWarnings(as.numeric(trimws(substring(token, equals + 1L))))
+        if (!is.finite(value) || value < 0) {
+          message <- if (is.null(margin)) {
+            sprintf("Benchmark share token '%s' is invalid.", token)
+          } else {
+            sprintf("Margin '%s' has invalid share token '%s'.", margin, token)
+          }
+          return(parse_error(paste(
+            message, "Enter one finite, nonnegative number after '='."
+          )))
+        }
+        levels[[i]] <- level
+        values[[i]] <- value
+      }
+      list(value = stats::setNames(values, levels), error = NULL)
+    }
     parse_margins <- function(txt) {
       lines <- trimws(unlist(strsplit(txt %||% "", "\n", fixed = TRUE)))
-      lines <- lines[nzchar(lines)]
-      out <- list()
-      for (ln in lines) {
-        nm <- trimws(sub(":.*$", "", ln))
-        kv <- trimws(unlist(strsplit(sub("^[^:]*:", "", ln), ",", fixed = TRUE)))
-        vals <- suppressWarnings(as.numeric(sub("^.*=", "", kv)))
-        keys <- trimws(sub("=.*$", "", kv))
-        ok <- nzchar(nm) & nzchar(keys) & !is.na(vals)
-        if (any(ok)) out[[nm]] <- stats::setNames(vals[ok], keys[ok])
+      if (!any(nzchar(lines))) {
+        return(parse_error("Enter at least one population margin."))
       }
-      out
+      out <- list()
+      for (i in which(nzchar(lines))) {
+        ln <- lines[[i]]
+        colon <- regexpr(":", ln, fixed = TRUE)[[1]]
+        if (colon < 0L) {
+          return(parse_error(sprintf(
+            "Population margin line %d ('%s') needs ':' after the margin name.", i, ln
+          )))
+        }
+        nm <- trimws(substr(ln, 1L, colon - 1L))
+        if (!nzchar(nm)) {
+          return(parse_error(sprintf(
+            "Population margin line %d ('%s') has an empty margin name.", i, ln
+          )))
+        }
+        if (nm %in% names(out)) {
+          return(parse_error(sprintf(
+            "Population margin line %d repeats the name '%s'.", i, nm
+          )))
+        }
+        shares <- parse_share_tokens(substring(ln, colon + 1L), margin = nm)
+        if (!is.null(shares$error)) return(shares)
+        total <- sum(shares$value)
+        if (!is.finite(total) || total <= 0) {
+          return(parse_error(sprintf(
+            "Margin '%s' must have a positive, finite total weight.", nm
+          )))
+        }
+        out[[nm]] <- shares$value
+      }
+      list(value = out, error = NULL)
     }
     parse_attributes <- function(txt) {
       lines <- trimws(unlist(strsplit(txt %||% "", "\n", fixed = TRUE)))
@@ -759,11 +872,11 @@ run_panel_studio <- function(...) {
       out
     }
     parse_named_shares <- function(txt) {
-      kv <- trimws(unlist(strsplit(txt %||% "", ",", fixed = TRUE)))
-      vals <- suppressWarnings(as.numeric(sub("^.*=", "", kv)))
-      keys <- trimws(sub("=.*$", "", kv))
-      ok <- nzchar(keys) & !is.na(vals)
-      stats::setNames(vals[ok], keys[ok])
+      txt <- trimws(txt %||% "")
+      if (!nzchar(txt)) {
+        return(parse_error("Enter benchmark shares as level=share pairs."))
+      }
+      parse_share_tokens(txt)
     }
     parse_opts <- function(txt) {
       x <- trimws(unlist(strsplit(txt %||% "", ",", fixed = TRUE))); x[nzchar(x)]
@@ -782,7 +895,7 @@ run_panel_studio <- function(...) {
       }
       if (identical(source, "anes")) {
         columns <- input$persona_columns
-        if (is.null(columns)) columns <- names(persona_source)
+        if (is.null(columns)) columns <- persona_fields
         if (!length(columns)) {
           return(list(
             enabled = FALSE,
@@ -796,10 +909,11 @@ run_panel_studio <- function(...) {
           ))
         }
       } else {
-        if (!length(parse_margins(input$margins))) {
+        margins <- parse_margins(input$margins)
+        if (!is.null(margins$error)) {
           return(list(
             enabled = FALSE,
-            reason = "Enter at least one population margin."
+            reason = margins$error
           ))
         }
         if (!nzchar(trimws(input$persona_tmpl %||% ""))) {
@@ -925,10 +1039,11 @@ run_panel_studio <- function(...) {
           )
         ))
       }
-      if (!length(parse_named_shares(input$benchmark))) {
+      shares <- parse_named_shares(input$benchmark)
+      if (!is.null(shares$error)) {
         return(list(
           enabled = FALSE,
-          reason = "Enter benchmark shares as level=share pairs."
+          reason = shares$error
         ))
       }
       if (!nzchar(trimws(input$benchmark_name %||% ""))) {
@@ -1011,14 +1126,19 @@ run_panel_studio <- function(...) {
     output$persona_text <- shiny::renderText({
       rows <- persona_rows()
       if (!length(rows)) {
-        return("Select a persona row above to inspect its full rendered text.")
+        return("Select a persona row above to inspect the text sent for it.")
+      }
+      columns <- input$persona_columns
+      if (!is.null(columns) && !length(columns)) {
+        return("Select at least one persona field.")
       }
       row <- rows[[1]]
+      text <- as.character(.render_persona_text(persona_frame_for(columns), row))
       paste0(
         "Source row ", row,
         if (length(rows) > 1L) " (the first selected row)" else "",
         "\n\n",
-        .render_persona_text(persona_source, row)
+        if (nzchar(text)) text else "(no text: every selected field is missing for this respondent)"
       )
     })
 
@@ -1037,7 +1157,7 @@ run_panel_studio <- function(...) {
       draw_seed <- .panel_gui_seed(input$seed)
       res <- if (identical(source, "anes")) {
         columns <- input$persona_columns
-        if (is.null(columns)) columns <- names(persona_source)
+        if (is.null(columns)) columns <- persona_fields
         if (!length(columns)) {
           administer_warning("Select at least one persona field.")
           return()
@@ -1053,21 +1173,16 @@ run_panel_studio <- function(...) {
         }
         LLMR.shiny::safe_llmr_call({
           if (!is.na(draw_seed)) set.seed(draw_seed)
-          frame <- if (setequal(columns, names(persona_source))) {
-            persona_source
-          } else {
-            .restrict_persona_frame(persona_source, columns)
-          }
           panel_from_personas(
-            frame,
+            persona_frame_for(columns),
             rows = if (identical(anes_mode, "selected")) rows else NULL,
             n = if (identical(anes_mode, "selected")) NULL else panel_n
           )
         }, shared$provider())
       } else {
         margins <- parse_margins(input$margins)
-        if (!length(margins)) {
-          administer_warning("Could not parse any population margins.")
+        if (!is.null(margins$error)) {
+          administer_warning(margins$error)
           return()
         }
         template <- trimws(input$persona_tmpl %||% "")
@@ -1077,7 +1192,7 @@ run_panel_studio <- function(...) {
         }
         LLMR.shiny::safe_llmr_call({
           if (!is.na(draw_seed)) set.seed(draw_seed)
-          panel_from_margins(margins, n = panel_n,
+          panel_from_margins(margins$value, n = panel_n,
                              persona_template = template)
         }, shared$provider())
       }
@@ -1287,9 +1402,8 @@ run_panel_studio <- function(...) {
             do.call(rbind, pieces)
           }
         }
-        # Repeated runs must show each persona the same questionnaire, so that
-        # what differs between runs is the model's answer. The supplied seed
-        # serves when there is one; otherwise a single seed is drawn for the set.
+        # Reusing the random seed preserves option orders and conjoint profile
+        # assignments across repeated administrations.
         run_seed <- if (!is.na(job$seed)) {
           job$seed
         } else if (job$runs > 1L) {
@@ -1403,8 +1517,8 @@ run_panel_studio <- function(...) {
         return()
       }
       bench <- parse_named_shares(input$benchmark)
-      if (!length(bench)) {
-        administer_warning("Enter benchmark shares as level=share pairs.")
+      if (!is.null(bench$error)) {
+        administer_warning(bench$error)
         return()
       }
       benchmark_name <- trimws(input$benchmark_name %||% "")
@@ -1412,8 +1526,8 @@ run_panel_studio <- function(...) {
         administer_warning("Enter a benchmark name.")
         return()
       }
-      bench_df <- data.frame(item_id = "q1", response = names(bench),
-                             share = as.numeric(bench), stringsAsFactors = FALSE)
+      bench_df <- data.frame(item_id = "q1", response = names(bench$value),
+                             share = as.numeric(bench$value), stringsAsFactors = FALSE)
       res <- LLMR.shiny::safe_llmr_call(
         panel_benchmark(responses(), bench_df, benchmark_name = benchmark_name),
         shared$provider())

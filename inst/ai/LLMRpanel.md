@@ -28,8 +28,9 @@ do not estimate a human population.
 ```r
 panel_from_margins(margins, n, persona_template = NULL)
 panel_from_data(data, n, persona_template = NULL, columns = NULL,
-                weights = NULL)             # joint draws from microdata rows
-panel_from_personas(data, n = NULL, rows = NULL, weights = NULL)
+                weights = NULL, na_strings = NULL)   # joint draws from rows
+panel_from_personas(data, n = NULL, rows = NULL, weights = NULL,
+                    questions = NULL, na_strings = NULL)
 as_persona_frame(data, questions = NULL, demographics = NULL, answers = NULL)
 item_likert(id, text, scale = c("strongly disagree", "disagree", "neutral",
                                 "agree", "strongly agree"))
@@ -61,7 +62,7 @@ tibble::as_tibble(panel)
 
 ```r
 library(LLMRpanel)
-set.seed(110)   # panel draws and order randomization are local RNG
+set.seed(110)   # panel draws and option order use the session's RNG
 
 panel <- panel_from_margins(
   list(age   = c("18-34" = .3, "35-64" = .45, "65+" = .25),
@@ -89,14 +90,22 @@ design <- conjoint_design(list(price = c("low", "high"),
                                origin = c("domestic", "imported")), n_tasks = 4)
 cj <- panel_administer(panel, conjoint_instrument(design), cfg)
 conjoint_amce(cj)
-
-# calculate sample sizes from the pilot's dispersion
 ```
 
 ## Rules
 
-- The package contains no population data. Supply the margins or source rows
-  used to construct a panel.
+- The package contains no population data. Its one dataset,
+  `anes_2024_personas`, holds 100 diversity-selected ANES 2024 respondents
+  with no survey weights; it stands for no population. Supply the margins or
+  source rows used to construct a panel.
+- Persona values are decoded when rendered: labeled survey columns (as
+  `haven::read_dta()` returns them) show their labels, unlabeled codes on an
+  endpoint-labeled scale read "5 on a scale from 1 (...) to 7 (...)", and
+  missing-data labels ("-9. Refused", "-8. Don't know") matching
+  `na_strings` are left out, with a message. Identifier columns (`id`,
+  `caseid`, `respondent_id`, and the like) and the `weights` column are never
+  rendered. Pass `questions` so that stated answers are shown under their
+  question wording rather than their column names.
 - Administration requires an explicit `config`; there is no implicit provider
   default.
 - `panel_batch_submit(..., state_path = path)` saves the panel batch job at
@@ -110,9 +119,12 @@ conjoint_amce(cj)
 - A benchmark data frame has columns `item_id`, `response`, and `share`.
   Shares should sum to 1 within each item. The comparison uses covered items
   and reports the number of closed items covered.
-- `panel_instrument()` randomizes item and option order by default.
-  `panel_bias_audit()` tests whether responses are associated with the first
-  option shown.
+- Each persona-item pair is an independent request, so the model never sees
+  an item order; `item_position` is the item's fixed position in the
+  instrument. By default `panel_instrument()` permutes choice options and
+  shows a Likert scale reversed with probability one-half;
+  `randomize = character(0)` keeps the supplied order. `panel_bias_audit()`
+  tests whether responses are associated with the first option shown.
 - Likert `score` is the 1-based position in the scale supplied to
   `item_likert()` and is stored in `responses$data`.
 - Unmatched closed-item replies remain `NA` and are counted as nonresponse.
@@ -129,8 +141,11 @@ conjoint_amce(cj)
   `$profiles` and the attribute universe in `$attributes`.
 - `conjoint_amce()` requires responses from `conjoint_instrument()` and clusters
   standard errors by persona. Its classed result retains run counts as ordinary
-  columns. Baseline rows have estimate 0 and missing standard errors.
-  validate the specified effect.
+  columns. Reference rows have estimate 0 and missing standard errors.
+  `attr(amce, "reference")` names each attribute's reference level, the first
+  declared level present in the estimation data, and `attr(amce, "n_clusters")`
+  counts the personas whose responses were estimated; `n_respondents` counts
+  every persona administered.
 - `LLMR::diagnostics()` returns the bias audit and benchmark fields.
   `LLMR::report()` returns the classed report.
 - `tibble::as_tibble(responses)` returns the plain `responses$data` tibble.
@@ -156,6 +171,14 @@ and options are in `messages[["user"]]`.
   match the instrument's ids.
 - "too small for distinct profiles" (warning) -> enlarge conjoint attribute
   levels or accept duplicate profiles knowingly.
+- "25 redraws found no distinct one" (warning) -> draw the design again or show
+  fewer profiles per task.
+- "replies cannot tell apart" -> two option or scale labels are equal after
+  ignoring case and surrounding spaces; rename one.
+- "Some declared conjoint levels are absent from the estimation data"
+  (warning) -> failed or unparsed executions removed every profile showing a
+  level; when it was an attribute's first level, effects are relative to the
+  level the warning names.
 - "must be a *named* probability vector" -> name every margin level.
 - "needs an administration of a conjoint_instrument()" -> `conjoint_amce()`
   was given a plain instrument; build it with `conjoint_instrument(design)`.

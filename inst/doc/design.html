@@ -342,50 +342,47 @@ LLMRpanel</h1>
 
 
 <p>LLMRpanel administers survey and experimental instruments to panels
-of language model personas. Use it to pretest questions, pilot conjoint
-designs, calculate sample sizes from pilot dispersion, or measure
-responses from a configured model. <code>panel_benchmark()</code>
-compares closed-item response shares with benchmark shares supplied by
-the user. It records deviations by item and response, nonresponse, and
-the number of closed items covered.</p>
-<p>Every example below executes offline through the <code>.runner</code>
-seam: a deterministic function stands in for the model, so the workflow
-runs during package builds without credentials or charges. One chunk
-near the end, gated by <code>RUN_LIVE</code>, shows the same call
-against a live provider.</p>
+of language model personas. It can be used to pretest questions and
+pilot conjoint designs. Responses describe a configured model under the
+supplied personas.</p>
+<p><code>panel_benchmark()</code> compares closed-item response shares
+with benchmark shares supplied by the user. It records deviations for
+the covered responses and nonresponse rates by item.</p>
+<p>The examples use a deterministic response function through
+<code>.runner</code>. The live example runs only when
+<code>RUN_LIVE</code> is set to <code>TRUE</code>.</p>
 <div id="what-silicon-panels-are-for" class="section level2">
 <h2>What silicon panels are for</h2>
 <ol style="list-style-type: decimal">
-<li><p><strong>Instrument pretesting.</strong> Administer draft items
-and inspect unmatched replies and first-option sensitivity.</p></li>
-<li><p><strong>Design piloting.</strong> Run conjoint tasks and estimate
-response dispersion before planning human data collection.</p></li>
-<li><p><strong>Model measurement.</strong> Compare response
-distributions across personas, item orders, option orders, or model
-configurations.</p></li>
+<li><p>Instrument pretesting uses draft items to examine unmatched
+replies and first-option sensitivity.</p></li>
+<li><p>Design piloting uses conjoint tasks to examine responses to
+recorded profile assignments.</p></li>
+<li><p>Model measurement compares response distributions under different
+personas or model configurations. Displayed option order can also be
+varied.</p></li>
 </ol>
 </div>
 <div id="panels-and-instruments" class="section level2">
 <h2>Panels and instruments</h2>
 <div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">library</span>(LLMRpanel)</span>
 <span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a></span>
-<span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a><span class="co"># A deterministic stand-in for the model: it always picks the first</span></span>
-<span id="cb1-4"><a href="#cb1-4" tabindex="-1"></a><span class="co"># DISPLAYED option of a closed item (so option-order randomization shows up</span></span>
-<span id="cb1-5"><a href="#cb1-5" tabindex="-1"></a><span class="co"># in the shares) and answers open items with a fixed sentence.</span></span>
-<span id="cb1-6"><a href="#cb1-6" tabindex="-1"></a>first_shown <span class="ot">&lt;-</span> <span class="cf">function</span>(experiments, ...) {</span>
-<span id="cb1-7"><a href="#cb1-7" tabindex="-1"></a>  experiments<span class="sc">$</span>response_text <span class="ot">&lt;-</span> <span class="fu">vapply</span>(<span class="fu">seq_len</span>(<span class="fu">nrow</span>(experiments)), <span class="cf">function</span>(i) {</span>
-<span id="cb1-8"><a href="#cb1-8" tabindex="-1"></a>    shown <span class="ot">&lt;-</span> experiments<span class="sc">$</span>option_order[i]</span>
-<span id="cb1-9"><a href="#cb1-9" tabindex="-1"></a>    <span class="cf">if</span> (<span class="fu">is.na</span>(shown)) <span class="st">&quot;Because it reaches the most people.&quot;</span></span>
-<span id="cb1-10"><a href="#cb1-10" tabindex="-1"></a>    <span class="cf">else</span> <span class="fu">strsplit</span>(shown, <span class="st">&quot;|&quot;</span>, <span class="at">fixed =</span> <span class="cn">TRUE</span>)[[<span class="dv">1</span>]][<span class="dv">1</span>]</span>
-<span id="cb1-11"><a href="#cb1-11" tabindex="-1"></a>  }, <span class="fu">character</span>(<span class="dv">1</span>))</span>
-<span id="cb1-12"><a href="#cb1-12" tabindex="-1"></a>  experiments<span class="sc">$</span>success <span class="ot">&lt;-</span> <span class="cn">TRUE</span></span>
-<span id="cb1-13"><a href="#cb1-13" tabindex="-1"></a>  experiments</span>
-<span id="cb1-14"><a href="#cb1-14" tabindex="-1"></a>}</span></code></pre></div>
+<span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a><span class="co"># Closed items receive the first displayed option. Open items receive a</span></span>
+<span id="cb1-4"><a href="#cb1-4" tabindex="-1"></a><span class="co"># fixed sentence.</span></span>
+<span id="cb1-5"><a href="#cb1-5" tabindex="-1"></a>first_shown <span class="ot">&lt;-</span> <span class="cf">function</span>(experiments, ...) {</span>
+<span id="cb1-6"><a href="#cb1-6" tabindex="-1"></a>  experiments<span class="sc">$</span>response_text <span class="ot">&lt;-</span> <span class="fu">vapply</span>(<span class="fu">seq_len</span>(<span class="fu">nrow</span>(experiments)), <span class="cf">function</span>(i) {</span>
+<span id="cb1-7"><a href="#cb1-7" tabindex="-1"></a>    shown <span class="ot">&lt;-</span> experiments<span class="sc">$</span>option_order[i]</span>
+<span id="cb1-8"><a href="#cb1-8" tabindex="-1"></a>    <span class="cf">if</span> (<span class="fu">is.na</span>(shown)) <span class="st">&quot;Because it reaches the most people.&quot;</span></span>
+<span id="cb1-9"><a href="#cb1-9" tabindex="-1"></a>    <span class="cf">else</span> <span class="fu">strsplit</span>(shown, <span class="st">&quot;|&quot;</span>, <span class="at">fixed =</span> <span class="cn">TRUE</span>)[[<span class="dv">1</span>]][<span class="dv">1</span>]</span>
+<span id="cb1-10"><a href="#cb1-10" tabindex="-1"></a>  }, <span class="fu">character</span>(<span class="dv">1</span>))</span>
+<span id="cb1-11"><a href="#cb1-11" tabindex="-1"></a>  experiments<span class="sc">$</span>success <span class="ot">&lt;-</span> <span class="cn">TRUE</span></span>
+<span id="cb1-12"><a href="#cb1-12" tabindex="-1"></a>  experiments</span>
+<span id="cb1-13"><a href="#cb1-13" tabindex="-1"></a>}</span></code></pre></div>
 <p><code>panel_from_margins()</code> samples attribute values from the
 supplied marginal distributions. <code>set.seed()</code> makes this draw
 reproducible.</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">110</span>)</span>
-<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a>panel <span class="ot">=</span> <span class="fu">panel_from_margins</span>(</span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a>panel <span class="ot">&lt;-</span> <span class="fu">panel_from_margins</span>(</span>
 <span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a>  <span class="fu">list</span>(</span>
 <span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a>    <span class="at">age =</span> <span class="fu">c</span>(<span class="st">&quot;18 to 34&quot;</span> <span class="ot">=</span> .<span class="dv">30</span>, <span class="st">&quot;35 to 64&quot;</span> <span class="ot">=</span> .<span class="dv">45</span>, <span class="st">&quot;65 plus&quot;</span> <span class="ot">=</span> .<span class="dv">25</span>),</span>
 <span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a>    <span class="at">party =</span> <span class="fu">c</span>(<span class="at">left =</span> .<span class="dv">45</span>, <span class="at">right =</span> .<span class="dv">45</span>, <span class="at">independent =</span> .<span class="dv">10</span>)</span>
@@ -397,20 +394,23 @@ reproducible.</p>
 <span id="cb2-11"><a href="#cb2-11" tabindex="-1"></a><span class="co">#&gt; &lt;silicon_panel | 12 persona(s) | attributes: age, party&gt;</span></span>
 <span id="cb2-12"><a href="#cb2-12" tabindex="-1"></a><span class="co">#&gt;   e.g. A 18 to 34 year old voter who leans left.</span></span>
 <span id="cb2-13"><a href="#cb2-13" tabindex="-1"></a></span>
-<span id="cb2-14"><a href="#cb2-14" tabindex="-1"></a>instrument <span class="ot">=</span> <span class="fu">panel_instrument</span>(<span class="fu">list</span>(</span>
-<span id="cb2-15"><a href="#cb2-15" tabindex="-1"></a>  <span class="fu">item_likert</span>(<span class="st">&quot;wk4&quot;</span>, <span class="st">&quot;A four day work week would benefit society.&quot;</span>),</span>
+<span id="cb2-14"><a href="#cb2-14" tabindex="-1"></a>instrument <span class="ot">&lt;-</span> <span class="fu">panel_instrument</span>(<span class="fu">list</span>(</span>
+<span id="cb2-15"><a href="#cb2-15" tabindex="-1"></a>  <span class="fu">item_likert</span>(<span class="st">&quot;wk4&quot;</span>, <span class="st">&quot;A four-day work week would benefit society.&quot;</span>),</span>
 <span id="cb2-16"><a href="#cb2-16" tabindex="-1"></a>  <span class="fu">item_choice</span>(</span>
 <span id="cb2-17"><a href="#cb2-17" tabindex="-1"></a>    <span class="st">&quot;fund&quot;</span>,</span>
 <span id="cb2-18"><a href="#cb2-18" tabindex="-1"></a>    <span class="st">&quot;Which should the city fund first?&quot;</span>,</span>
 <span id="cb2-19"><a href="#cb2-19" tabindex="-1"></a>    <span class="fu">c</span>(<span class="st">&quot;public transit&quot;</span>, <span class="st">&quot;road repair&quot;</span>)</span>
 <span id="cb2-20"><a href="#cb2-20" tabindex="-1"></a>  ),</span>
-<span id="cb2-21"><a href="#cb2-21" tabindex="-1"></a>  <span class="fu">item_open</span>(<span class="st">&quot;why&quot;</span>, <span class="st">&quot;In one sentence, why?&quot;</span>)</span>
-<span id="cb2-22"><a href="#cb2-22" tabindex="-1"></a>))</span>
-<span id="cb2-23"><a href="#cb2-23" tabindex="-1"></a>instrument</span>
-<span id="cb2-24"><a href="#cb2-24" tabindex="-1"></a><span class="co">#&gt; &lt;panel_instrument | 3 item(s) | randomized: option_order&gt;</span></span>
-<span id="cb2-25"><a href="#cb2-25" tabindex="-1"></a><span class="co">#&gt;   [wk4] (likert) A four day work week would benefit society.</span></span>
-<span id="cb2-26"><a href="#cb2-26" tabindex="-1"></a><span class="co">#&gt;   [fund] (choice) Which should the city fund first?</span></span>
-<span id="cb2-27"><a href="#cb2-27" tabindex="-1"></a><span class="co">#&gt;   [why] (open) In one sentence, why?</span></span></code></pre></div>
+<span id="cb2-21"><a href="#cb2-21" tabindex="-1"></a>  <span class="fu">item_open</span>(</span>
+<span id="cb2-22"><a href="#cb2-22" tabindex="-1"></a>    <span class="st">&quot;why&quot;</span>,</span>
+<span id="cb2-23"><a href="#cb2-23" tabindex="-1"></a>    <span class="st">&quot;What should the city consider when choosing between public transit and road repair?&quot;</span></span>
+<span id="cb2-24"><a href="#cb2-24" tabindex="-1"></a>  )</span>
+<span id="cb2-25"><a href="#cb2-25" tabindex="-1"></a>))</span>
+<span id="cb2-26"><a href="#cb2-26" tabindex="-1"></a>instrument</span>
+<span id="cb2-27"><a href="#cb2-27" tabindex="-1"></a><span class="co">#&gt; &lt;panel_instrument | 3 item(s) | randomized: option_order&gt;</span></span>
+<span id="cb2-28"><a href="#cb2-28" tabindex="-1"></a><span class="co">#&gt;   [wk4] (likert) A four-day work week would benefit society.</span></span>
+<span id="cb2-29"><a href="#cb2-29" tabindex="-1"></a><span class="co">#&gt;   [fund] (choice) Which should the city fund first?</span></span>
+<span id="cb2-30"><a href="#cb2-30" tabindex="-1"></a><span class="co">#&gt;   [why] (open) What should the city consider when choosing between public transit and road repair?</span></span></code></pre></div>
 <p>Margins are useful when targets are published as tables. When
 microdata is available, <code>panel_from_data()</code> is the joint
 distribution counterpart. It draws personas from observed rows and
@@ -418,16 +418,17 @@ therefore preserves relationships among attributes rather than sampling
 each margin independently. <code>LLMR::report()</code> identifies
 whether a panel came from supplied margins, microdata rows, or supplied
 personas.</p>
-<p><code>panel_administer()</code> sends each item to each persona as an
-independent request. It returns a <code>panel_responses</code> object
-with response rows in <code>$data</code> and the panel, instrument,
-benchmark record, and token usage in separate components. It randomizes
-option order per response (a Likert scale is shown reversed for a random
-half) and records <code>item_position</code> (the item’s fixed position
-in the instrument) and <code>option_order</code> (what this respondent
-saw) in <code>$data</code>. When comparing models, reset the seed before
-each administration so both models face the same option-order
-assignments.</p>
+<p><code>panel_administer()</code> sends each persona-item pair as an
+independent request. It returns a <code>panel_responses</code> object.
+Response rows are stored in <code>$data</code>; the panel and instrument
+are retained in separate fields.</p>
+<p>The default instrument settings permute choice options for each
+request. A Likert scale retains its original order or is reversed, each
+with probability one-half. <code>option_order</code> records the
+displayed options. <code>item_position</code> records the item’s fixed
+position in the instrument, rather than an order of exposure.</p>
+<p>When comparing models, reset the seed before each administration to
+reproduce the same option assignments.</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a>cfg <span class="ot">=</span> LLMR<span class="sc">::</span><span class="fu">llm_config</span>(<span class="st">&quot;groq&quot;</span>, <span class="st">&quot;openai/gpt-oss-20b&quot;</span>, <span class="at">temperature =</span> <span class="fl">0.8</span>)</span>
 <span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a>cfg_qwen <span class="ot">=</span> LLMR<span class="sc">::</span><span class="fu">llm_config</span>(<span class="st">&quot;groq&quot;</span>, <span class="st">&quot;qwen/qwen3-32b&quot;</span>, <span class="at">temperature =</span> <span class="fl">0.8</span>)</span>
 <span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a></span>
@@ -458,14 +459,14 @@ assignments.</p>
 <span id="cb3-28"><a href="#cb3-28" tabindex="-1"></a><span class="co">#&gt;   item_id     n parse_failures execution_failures order_effect_p order_test_note</span></span>
 <span id="cb3-29"><a href="#cb3-29" tabindex="-1"></a><span class="co">#&gt;   &lt;chr&gt;   &lt;int&gt;          &lt;int&gt;              &lt;int&gt;          &lt;dbl&gt; &lt;chr&gt;          </span></span>
 <span id="cb3-30"><a href="#cb3-30" tabindex="-1"></a><span class="co">#&gt; 1 fund       12              0                  0             NA sparse cells; …</span></span>
-<span id="cb3-31"><a href="#cb3-31" tabindex="-1"></a><span class="co">#&gt; 2 why        12              0                  0             NA &lt;NA&gt;           </span></span>
+<span id="cb3-31"><a href="#cb3-31" tabindex="-1"></a><span class="co">#&gt; 2 why        12              0                  0             NA open item; no …</span></span>
 <span id="cb3-32"><a href="#cb3-32" tabindex="-1"></a><span class="co">#&gt; 3 wk4        12              0                  0             NA sparse cells; …</span></span>
 <span id="cb3-33"><a href="#cb3-33" tabindex="-1"></a>LLMR<span class="sc">::</span><span class="fu">diagnostics</span>(resp)</span>
 <span id="cb3-34"><a href="#cb3-34" tabindex="-1"></a><span class="co">#&gt; # A tibble: 3 × 10</span></span>
 <span id="cb3-35"><a href="#cb3-35" tabindex="-1"></a><span class="co">#&gt;   item_id     n parse_failures execution_failures order_effect_p order_test_note</span></span>
 <span id="cb3-36"><a href="#cb3-36" tabindex="-1"></a><span class="co">#&gt;   &lt;chr&gt;   &lt;int&gt;          &lt;int&gt;              &lt;int&gt;          &lt;dbl&gt; &lt;chr&gt;          </span></span>
 <span id="cb3-37"><a href="#cb3-37" tabindex="-1"></a><span class="co">#&gt; 1 fund       12              0                  0             NA sparse cells; …</span></span>
-<span id="cb3-38"><a href="#cb3-38" tabindex="-1"></a><span class="co">#&gt; 2 why        12              0                  0             NA &lt;NA&gt;           </span></span>
+<span id="cb3-38"><a href="#cb3-38" tabindex="-1"></a><span class="co">#&gt; 2 why        12              0                  0             NA open item; no …</span></span>
 <span id="cb3-39"><a href="#cb3-39" tabindex="-1"></a><span class="co">#&gt; 3 wk4        12              0                  0             NA sparse cells; …</span></span>
 <span id="cb3-40"><a href="#cb3-40" tabindex="-1"></a><span class="co">#&gt; # ℹ 4 more variables: benchmark_state &lt;chr&gt;, items_covered &lt;int&gt;,</span></span>
 <span id="cb3-41"><a href="#cb3-41" tabindex="-1"></a><span class="co">#&gt; #   items_total &lt;int&gt;, mean_abs_dev &lt;dbl&gt;</span></span>
@@ -478,7 +479,7 @@ assignments.</p>
 <span id="cb3-48"><a href="#cb3-48" tabindex="-1"></a><span class="co">#&gt;   item_id     n parse_failures execution_failures order_effect_p order_test_note</span></span>
 <span id="cb3-49"><a href="#cb3-49" tabindex="-1"></a><span class="co">#&gt;   &lt;chr&gt;   &lt;int&gt;          &lt;int&gt;              &lt;int&gt;          &lt;dbl&gt; &lt;chr&gt;          </span></span>
 <span id="cb3-50"><a href="#cb3-50" tabindex="-1"></a><span class="co">#&gt; 1 fund       12              0                  0             NA sparse cells; …</span></span>
-<span id="cb3-51"><a href="#cb3-51" tabindex="-1"></a><span class="co">#&gt; 2 why        12              0                  0             NA &lt;NA&gt;           </span></span>
+<span id="cb3-51"><a href="#cb3-51" tabindex="-1"></a><span class="co">#&gt; 2 why        12              0                  0             NA open item; no …</span></span>
 <span id="cb3-52"><a href="#cb3-52" tabindex="-1"></a><span class="co">#&gt; 3 wk4        12              0                  0             NA sparse cells; …</span></span></code></pre></div>
 </div>
 <div id="compare-responses-with-a-benchmark" class="section level2">
@@ -535,9 +536,9 @@ covers both.</p>
 <span id="cb5-26"><a href="#cb5-26" tabindex="-1"></a><span class="co">#&gt; PANEL. 12 persona(s) drawn from supplied margins over: age, party.</span></span>
 <span id="cb5-27"><a href="#cb5-27" tabindex="-1"></a><span class="co">#&gt; RESPONSES. 36 total; 0 execution failure(s); 0 parse failure(s).</span></span>
 <span id="cb5-28"><a href="#cb5-28" tabindex="-1"></a><span class="co">#&gt; FIRST-OPTION SENSITIVITY (chi-squared p by item; small p = which option was listed first moved the answers):</span></span>
-<span id="cb5-29"><a href="#cb5-29" tabindex="-1"></a><span class="co">#&gt;   fund         n =  12  execution failures =  0  parse failures =  0  order p = n/a</span></span>
-<span id="cb5-30"><a href="#cb5-30" tabindex="-1"></a><span class="co">#&gt;   why          n =  12  execution failures =  0  parse failures =  0  order p = n/a</span></span>
-<span id="cb5-31"><a href="#cb5-31" tabindex="-1"></a><span class="co">#&gt;   wk4          n =  12  execution failures =  0  parse failures =  0  order p = n/a</span></span>
+<span id="cb5-29"><a href="#cb5-29" tabindex="-1"></a><span class="co">#&gt;   fund         n =  12  execution failures =  0  parse failures =  0  order p = n/a (sparse cells; chi-square approximation unreliable)</span></span>
+<span id="cb5-30"><a href="#cb5-30" tabindex="-1"></a><span class="co">#&gt;   why          n =  12  execution failures =  0  parse failures =  0  order p = n/a (open item; no options to order)</span></span>
+<span id="cb5-31"><a href="#cb5-31" tabindex="-1"></a><span class="co">#&gt;   wk4          n =  12  execution failures =  0  parse failures =  0  order p = n/a (sparse cells; chi-square approximation unreliable)</span></span>
 <span id="cb5-32"><a href="#cb5-32" tabindex="-1"></a>resp<span class="sc">$</span>benchmark<span class="sc">$</span>nonresponse</span>
 <span id="cb5-33"><a href="#cb5-33" tabindex="-1"></a><span class="co">#&gt; # A tibble: 2 × 4</span></span>
 <span id="cb5-34"><a href="#cb5-34" tabindex="-1"></a><span class="co">#&gt;   item_id execution_failures execution_failure_rate nonresponse_rate</span></span>
@@ -590,24 +591,32 @@ space cannot supply them. <code>conjoint_instrument()</code> creates one
 forced-choice item per task. Administration renders a fresh draw for
 each respondent and records it with the response.
 <code>conjoint_amce()</code> estimates from those recorded profiles
-relative to the first level of each attribute and calculates standard
-errors clustered by persona.</p>
+relative to a reference level for each attribute and calculates standard
+errors clustered by persona. The reference is the first level, in the
+design’s order, that appears in the estimation data.</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a>cj_instr <span class="ot">=</span> <span class="fu">conjoint_instrument</span>(design, <span class="st">&quot;Which product would you buy?&quot;</span>)</span>
 <span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">110</span>)</span>
 <span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a>cj <span class="ot">=</span> <span class="fu">panel_administer</span>(panel, cj_instr, cfg, <span class="at">.runner =</span> first_shown)</span>
 <span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a><span class="fu">conjoint_amce</span>(cj)</span>
-<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a><span class="co">#&gt; &lt;conjoint_amce | 96 profile row(s) | 12 respondent(s) | 0 missing, 0 execution failure(s)&gt;</span></span>
-<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a><span class="co">#&gt; # A tibble: 4 × 6</span></span>
-<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a><span class="co">#&gt;   attribute level    estimate std_error  ci_lo   ci_hi</span></span>
-<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a><span class="co">#&gt;   &lt;chr&gt;     &lt;chr&gt;       &lt;dbl&gt;     &lt;dbl&gt;  &lt;dbl&gt;   &lt;dbl&gt;</span></span>
-<span id="cb7-9"><a href="#cb7-9" tabindex="-1"></a><span class="co">#&gt; 1 price     low        0        NA      NA     NA     </span></span>
-<span id="cb7-10"><a href="#cb7-10" tabindex="-1"></a><span class="co">#&gt; 2 price     high       0.0582    0.138  -0.244  0.361 </span></span>
-<span id="cb7-11"><a href="#cb7-11" tabindex="-1"></a><span class="co">#&gt; 3 origin    domestic   0        NA      NA     NA     </span></span>
-<span id="cb7-12"><a href="#cb7-12" tabindex="-1"></a><span class="co">#&gt; 4 origin    imported  -0.135     0.0932 -0.340  0.0703</span></span></code></pre></div>
+<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a><span class="co">#&gt; &lt;conjoint_amce | 96 profile row(s) | 12 respondent(s), 12 estimation cluster(s) | 0 missing, 0 execution failure(s)&gt;</span></span>
+<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a><span class="co">#&gt; Reference levels: price = low; origin = domestic</span></span>
+<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a><span class="co">#&gt; # A tibble: 4 × 6</span></span>
+<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a><span class="co">#&gt;   attribute level    estimate std_error  ci_lo   ci_hi</span></span>
+<span id="cb7-9"><a href="#cb7-9" tabindex="-1"></a><span class="co">#&gt;   &lt;chr&gt;     &lt;chr&gt;       &lt;dbl&gt;     &lt;dbl&gt;  &lt;dbl&gt;   &lt;dbl&gt;</span></span>
+<span id="cb7-10"><a href="#cb7-10" tabindex="-1"></a><span class="co">#&gt; 1 price     low        0        NA      NA     NA     </span></span>
+<span id="cb7-11"><a href="#cb7-11" tabindex="-1"></a><span class="co">#&gt; 2 price     high       0.0582    0.138  -0.244  0.361 </span></span>
+<span id="cb7-12"><a href="#cb7-12" tabindex="-1"></a><span class="co">#&gt; 3 origin    domestic   0        NA      NA     NA     </span></span>
+<span id="cb7-13"><a href="#cb7-13" tabindex="-1"></a><span class="co">#&gt; 4 origin    imported  -0.135     0.0932 -0.340  0.0703</span></span></code></pre></div>
 <p><code>conjoint_amce()</code> returns a classed result with one row
-for each observed attribute level. Baseline levels have estimate 0 and
+for each observed attribute level. Reference levels have estimate 0 and
 missing standard errors. Other rows contain the estimated contrast and
-95 percent interval. Run counts remain in separate columns.</p>
+95 percent interval. Run counts remain in separate columns. The printed
+header names the reference levels, which are also in
+<code>attr(amce, &quot;reference&quot;)</code>, and gives the number of personas
+whose responses entered the estimate, the clusters for the standard
+errors. When every profile showing an attribute’s first level is lost,
+for instance because those executions failed, the next level present
+becomes the reference and a warning names it.</p>
 </div>
 <div id="a-live-administration" class="section level2">
 <h2>A live administration</h2>
